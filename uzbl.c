@@ -329,11 +329,16 @@ setup_signal(int signr, sigfunc *shandler) {
 }
 
 static void
-clean_up(void) {
+clean_up_files(void) {
     if (uzbl.behave.fifo_dir)
         unlink (uzbl.comm.fifo_path);
     if (uzbl.behave.socket_dir)
         unlink (uzbl.comm.socket_path);
+}
+
+static void
+clean_up(void) {
+    clean_up_files();
 
     g_free(uzbl.state.executable_path);
     g_string_free(uzbl.state.keycmd, TRUE);
@@ -896,7 +901,8 @@ static void
 close_uzbl (WebKitWebView *page, GArray *argv) {
     (void)page;
     (void)argv;
-    gtk_main_quit ();
+    clean_up_files();
+    exit(EXIT_SUCCESS);
 }
 
 /* --Statusbar functions-- */
