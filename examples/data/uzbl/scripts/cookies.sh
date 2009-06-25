@@ -26,7 +26,7 @@
 
 cookie_config=${XDG_CONFIG_HOME:-$HOME/.config}/uzbl/cookies
 [ -z "$cookie_config" ] && exit 1
-[ -d ${XDG_DATA_HOME:-$HOME/.local/share}/uzbl/ ] && cookie_data=${XDG_DATA_HOME:-$home/.local/share}/uzbl/cookies.txt || exit 1
+[ -d ${XDG_DATA_HOME:-$HOME/.local/share}/uzbl/ ] && cookie_dir=${XDG_DATA_HOME:-$home/.local/share}/uzbl/cookies || exit 1
 
 
 notifier=
@@ -54,21 +54,18 @@ path=$9
 shift
 cookie=$9
 
+mkdir -p "$cookie_dir"
+cookie_file="$cookie_dir/$host"
+
 field_domain=$host
 field_path=$path
 field_name=
 field_value=
 field_exp='end_session'
 
-function notify () {
-	[ -n "$notifier" ] && $notifier "$@"
-}
-
-
-# FOR NOW LETS KEEP IT SIMPLE AND JUST ALWAYS PUT AND ALWAYS GET
 function parse_cookie () {
 	IFS=$';'
-	first_pair=1
+	local first_pair=1
 	for pair in $cookie
 	do
 		if [ "$first_pair" == 1 ]
@@ -77,9 +74,10 @@ function parse_cookie () {
 			field_value=${pair#*=}
 			first_pair=0
 		else
-			read -r pair <<< "$pair" #strip leading/trailing wite space
-			key=${pair%%=*}
-			val=${pair#*=}
+			local key=${pair%%=*}
+                        key=${key#* }
+			local val=${pair#*=}
+                        val=${val% *}
 			[ "$key" == expires ] && field_exp=`date -u -d "$val" +'%s'`
 			# TODO: domain
 			[ "$key" == path ] && field_path=$val
@@ -88,62 +86,102 @@ function parse_cookie () {
 	unset IFS
 }
 
-# match cookies in cookies.txt against hostname and path
-function get_cookie () {
-	path_esc=${path//\//\\/}
-	search="^[^\t]*$host\t[^\t]*\t$path_esc"
-	cookie=`awk "/$search/" $cookie_data 2>/dev/null | tail -n 1`
-	if [ -z "$cookie" ]
-	then
-		notify "Get_cookie: search: $search in $cookie_data -> no result"
-		false
-	else
-		notify "Get_cookie: search: $search in $cookie_data -> result: $cookie"
-		read domain alow_read_other_subdomains path http_required expiration name value <<< "$cookie"
-		cookie="$name=$value" 
-		true
-	fi
+# just append the cookie to the log
+function write_cookie () {
+        echo -e "$field_domain\tFALSE\t$field_path\tFALSE\t$field_exp\t$field_name\t$field_value" >> $cookie_file
 }
 
-function save_cookie () {
-	if parse_cookie
-	then
-		data="$field_domain\tFALSE\t$field_path\tFALSE\t$field_exp\t$field_name\t$field_value"
-		notify "save_cookie: adding $data to $cookie_data"
-		echo -e "$data" >> $cookie_data
-	else
-		notify "not saving a cookie. since we don't have policies yet, parse_cookie must have returned false. this is a bug"
-	fi
+# match cookies in cookies.txt againsh hostname and path
+function print_cookies () {
+        local res=false
+        declare -a cookies
+
+        [[ -f $cookie_file ]] || return 1
+
+        while read  c_domain  c_alow_read_other_subdomains  c_path  c_http_required  c_expiration  c_name  c_value ; do
+
+                if [[ "$c_domain" != "$host" ]] ; then
+                        # no direct match, can we do domain match?
+                        [[ "$c_alow_read_other_subdomains" = 'TRUE' ]] || continue
+                        # is $host a subdomain of $c_domain?
+                        [[ "$c_domain" = "${c_domain%$host}" ]]        && continue
+                fi
+
+                # if $path is specified, make sure that c_path 
+                if [[ -n "$path" ]] ; then
+                        [[ "$path" = "${path#$c_path}" ]] && continue
+                fi
+
+                cookies[${#cookies[@]}]="$c_name=$c_value" 
+                res=true
+        done < $cookie_file
+
+        if $res ; then
+                # only output the last (most recent) for each name
+                local seen=:
+                for (( n=${#cookies[@]} - 1 ; n>=0 ; n-- )) ; do
+                        local cookie=${cookies[$n]}
+                        local name=${cookie%%=*}
+                        [[ "${seen/:$name:/}" = "$seen" ]] || continue
+                        echo $cookie
+                        seen="$seen$name:"
+                done
+        fi
+
+        $res
 }
 
-[ $action == PUT ] && save_cookie
-[ $action == GET ] && get_cookie && echo "$cookie"
-
-exit
-
-
-# TODO: implement this later.
-# $1 = section (TRUSTED or DENY)
-# $2 =url
-function match () {
-	sed -n "/$1/,/^\$/p" $cookie_config 2>/dev/null | grep -q "^$host"
+function policy_match () {
+        local section=$1
+        local host=$2
+        [ -f $config_file ] || return 0
+	sed -n "/^ *$section *\$/,/^\$/p" $config_file 2>/dev/null | grep -q "^ *$host *\$"
 }
 
-function fetch_cookie () {
-	cookie=`cat $cookie_data`
+function policy_add () {
+        local section=$1
+        local host=$2
+        sed -i -e "s/^$section$/$section\n$host/" $config_file
 }
 
-function store_cookie () {
-	echo $cookie > $cookie_data
-}
+policy_match DENY $host && exit 1
 
-if match TRUSTED $host
-then
-	[ $action == PUT ] && store_cookie $host
-	[ $action == GET ] && fetch_cookie && echo "$cookie"
-elif ! match DENY $host
-then
-	[ $action == PUT ] &&                 cookie=`zenity --entry --title 'Uzbl Cookie handler' --text "Accept this cookie from $host ?" --entry-text="$cookie"` && store_cookie $host
-	[ $action == GET ] && fetch_cookie && cookie=`zenity --entry --title 'Uzbl Cookie handler' --text "Submit this cookie to $host ?"   --entry-text="$cookie"` && echo $cookie
+if [[ $action = GET ]] ; then
+        print_cookies
+        exit $?
 fi
-exit 0
+
+[[ $action = PUT ]] || exit 1
+
+if ! parse_cookie ; then
+        zenity --error --title='Uzbl Cookie Handler' \
+            --text="Failed to parse cookie from $host for $path\n\n$cookie"
+        exit 1
+fi
+
+if ! ( policy_match TRUSTED $host ) ; then
+
+        choice=$(zenity --title 'Uzbl Cookie Handler' --list --radiolist \
+                --height 310 \
+                --text "We got this cookie from $host for $path\n\n${cookie//; /\\n}\n" \
+                --column "" \
+                --column "Action:" FALSE "Accept always" TRUE "Accept this time" FALSE "Deny this time" FALSE "Deny always")
+        case $choice in
+            Accept\ always)
+                policy_add TRUSTED $host
+                ;;
+            Accept\ this\ time)
+                # fall through
+                ;;
+            Deny\ always)
+                policy_add DENY $host
+                exit 1
+                ;;
+            *) # "Deny this time" and anything else
+                exit 1
+                ;;
+        esac
+fi
+
+write_cookie
+exit $?
