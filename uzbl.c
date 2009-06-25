@@ -2575,4 +2575,4 @@ main (int argc, char* argv[]) {
     return EXIT_SUCCESS;
 }
 
-/* vi: set et ts=4: */
+/* vi: set et ts=4 sw=4: */

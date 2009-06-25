@@ -68,4 +68,5 @@ main(int argc, char* argv[]) {
         return 1;
     }
 }
-/* vi: set et ts=4: */
+
+/* vi: set et ts=4 sw=4: */
