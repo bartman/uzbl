@@ -47,6 +47,8 @@
 #include <libsoup/soup.h>
 
 #include <stdio.h>
+#include <stdbool.h>
+#include <inttypes.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -217,7 +219,7 @@ expand_vars(char *s) {
                         if(c->type == TYPE_STR)
                             g_string_append(buf, (gchar *)*c->ptr);
                         else if(c->type == TYPE_INT) {
-                            char *b = itos((int)*c->ptr);
+                            char *b = itos((intptr_t)*c->ptr);
                             g_string_append(buf, b);
                             g_free(b);
                         }
@@ -2438,7 +2440,7 @@ dump_var_hash(gpointer k, gpointer v, gpointer ud) {
     if(c->type == TYPE_STR)
         printf("set %s = %s\n", (char *)k, *c->ptr?(char *)*c->ptr:" ");
     else if(c->type == TYPE_INT)
-        printf("set %s = %d\n", (char *)k, (int)*c->ptr);
+        printf("set %s = %"PRIuPTR"\n", (char *)k, (intptr_t)*c->ptr);
 }
 
 static void
